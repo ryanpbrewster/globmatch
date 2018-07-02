@@ -73,6 +73,9 @@ impl FromStr for Path {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
+        if s.is_empty() {
+            return Ok(Path::new());
+        }
         let fragments = s
             .split('/')
             .map(|t| t.parse::<Fragment>())
@@ -99,6 +102,10 @@ impl Path {
         Path(Vec::new())
     }
 
+    /**
+     * Recursive implementation of the glob match algorithm.
+     * Good best-case behavior, very bad worst-case behavior,
+     */
     fn recursive_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         match (a.first(), b.first()) {
             // Trivial success
@@ -140,6 +147,10 @@ impl Path {
         }
     }
 
+    /**
+     * Dynamic-programming implementation of the glob match algorithm.
+     * Acceptable best-case behavior, acceptable worst-case behavior,
+     */
     fn dp_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         let (m, n) = (a.len() + 1, b.len() + 1);
         let mut memo: Vec<bool> = vec![false; m * n];
@@ -183,6 +194,10 @@ impl Path {
         memo[m * n - 1]
     }
 
+    /**
+     * Dynamic-programming implementation of the glob match algorithm with lower memory use.
+     * Acceptable best-case behavior, acceptable worst-case behavior.
+     */
     fn optimized_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         let (m, n) = (a.len() + 1, b.len() + 1);
         let mut cur: Vec<bool> = vec![false; n];
@@ -228,72 +243,49 @@ impl Path {
 mod tests {
     use super::*;
 
+    fn overlap(a: &str, b: &str) -> bool {
+        Path::overlap(
+            a.parse::<Path>().unwrap().as_ref(),
+            b.parse::<Path>().unwrap().as_ref(),
+        )
+    }
+
     #[test]
     fn empty_paths_overlap() {
-        assert!(Path::overlap(Path::new().as_ref(), Path::new().as_ref()));
+        assert!(overlap("", ""));
     }
 
     #[test]
     fn literal_paths_overlap_if_equal() {
-        assert!(Path::overlap(
-            "a/b/c".parse::<Path>().unwrap().as_ref(),
-            "a/b/c".parse::<Path>().unwrap().as_ref()
-        ));
-        assert!(!Path::overlap(
-            "a/b/c".parse::<Path>().unwrap().as_ref(),
-            "d/e/f".parse::<Path>().unwrap().as_ref()
-        ));
+        assert!(overlap("a/b/c", "a/b/c"));
+        assert!(!overlap("a/b/c", "d/e/f"));
     }
 
     #[test]
     fn wildcards_match_any_literal() {
-        assert!(Path::overlap(
-            "a/b/*".parse::<Path>().unwrap().as_ref(),
-            "a/b/c".parse::<Path>().unwrap().as_ref()
-        ));
+        assert!(overlap("a/b/*", "a/b/c"));
     }
     #[test]
     fn wildcards_do_not_match_multiple_literals() {
-        assert!(!Path::overlap(
-            "a/b/*".parse::<Path>().unwrap().as_ref(),
-            "a".parse::<Path>().unwrap().as_ref()
-        ));
-        assert!(!Path::overlap(
-            "a/b/*".parse::<Path>().unwrap().as_ref(),
-            "a/b/c/d/e".parse::<Path>().unwrap().as_ref()
-        ));
+        assert!(!overlap("a/b/*", "a"));
+        assert!(!overlap("a/b/*", "a/b/c/d/e"));
     }
 
     #[test]
     fn globs_match_empty_paths() {
-        assert!(Path::overlap(
-            "**".parse::<Path>().unwrap().as_ref(),
-            Path::new().as_ref()
-        ));
+        assert!(overlap("**", ""));
     }
 
     #[test]
     fn globs_match_many_literals() {
-        assert!(Path::overlap(
-            "**".parse::<Path>().unwrap().as_ref(),
-            "a/b/c/d/e".parse::<Path>().unwrap().as_ref()
-        ));
+        assert!(overlap("**", "a/b/c/d/e"));
     }
 
     #[test]
     fn globs_with_suffixes_only_match_suffixed_strings() {
-        assert!(Path::overlap(
-            "**/d/e".parse::<Path>().unwrap().as_ref(),
-            "a/b/c/d/e".parse::<Path>().unwrap().as_ref()
-        ));
-        assert!(!Path::overlap(
-            "**/d/e".parse::<Path>().unwrap().as_ref(),
-            "a/b/c/d".parse::<Path>().unwrap().as_ref()
-        ));
-        assert!(!Path::overlap(
-            "**/d/e".parse::<Path>().unwrap().as_ref(),
-            "a/b/c/d/e/f".parse::<Path>().unwrap().as_ref()
-        ));
+        assert!(overlap("**/d/e", "a/b/c/d/e"));
+        assert!(!overlap("**/d/e", "a/b/c/d"));
+        assert!(!overlap("**/d/e", "a/b/c/d/e/f"));
     }
 
     use test::Bencher;
