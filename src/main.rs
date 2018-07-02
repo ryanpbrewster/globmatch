@@ -1,9 +1,13 @@
+#![feature(test)]
+extern crate test;
+
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::BufRead;
+use std::ops::IndexMut;
 use std::str::FromStr;
 
 fn main() -> Result<(), Box<Error>> {
-    println!("Hello, world!");
     let paths: Vec<Path> = {
         let stdin = std::io::stdin();
         let mut buf = Vec::new();
@@ -80,8 +84,7 @@ impl Path {
         Path(Vec::new())
     }
 
-    fn overlap(a: &[Fragment], b: &[Fragment]) -> bool {
-        println!("checking {:?}, {:?}", a.first(), b.first());
+    fn slow_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         match (a.first(), b.first()) {
             // Trivial success
             (None, None) => true,
@@ -121,10 +124,57 @@ impl Path {
             }
         }
     }
+
+    fn fast_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+        let (m, n) = (a.len() + 1, b.len() + 1);
+        let mut memo: Vec<bool> = vec![false; m * n];
+        memo[0] = true;
+        for i in 1..m {
+            memo[i * n] = memo[(i - 1) * n] && a[i - 1] == Fragment::Glob;
+        }
+        for j in 1..n {
+            memo[j] = memo[j - 1] && b[j - 1] == Fragment::Glob;
+        }
+        for i in 1..m {
+            for j in 1..n {
+                memo[i * n + j] = match (&a[i - 1], &b[j - 1]) {
+                    // Wildcards
+                    (Fragment::Literal(_), Fragment::Wildcard)
+                    | (Fragment::Wildcard, Fragment::Literal(_))
+                    | (Fragment::Wildcard, Fragment::Wildcard) => memo[(i - 1) * n + (j - 1)],
+                    // Literals
+                    (Fragment::Literal(ref a0), Fragment::Literal(ref b0)) => {
+                        a0 == b0 && memo[(i - 1) * n + (j - 1)]
+                    }
+                    // Left glob
+                    (Fragment::Glob, Fragment::Literal(_))
+                    | (Fragment::Glob, Fragment::Wildcard) => {
+                        memo[i * n + (j - 1)] || memo[(i - 1) * n + (j - 1)]
+                    }
+                    // Right glob
+                    (Fragment::Literal(_), Fragment::Glob)
+                    | (Fragment::Wildcard, Fragment::Glob) => {
+                        memo[(i - 1) * n + j] || memo[(i - 1) * n + (j - 1)]
+                    }
+                    // Both glob
+                    (Fragment::Glob, Fragment::Glob) => {
+                        memo[(i - 1) * n + j]
+                            || memo[i * n + (j - 1)]
+                            || memo[(i - 1) * n + (j - 1)]
+                    }
+                };
+            }
+        }
+        memo[m * n - 1]
+    }
+
+    fn overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+        Path::fast_overlap(a, b)
+    }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
@@ -193,5 +243,13 @@ mod test {
             "**/d/e".parse::<Path>().unwrap().as_ref(),
             "a/b/c/d/e/f".parse::<Path>().unwrap().as_ref()
         ));
+    }
+
+    use test::Bencher;
+    #[bench]
+    fn glob_glob_bench(bencher: &mut Bencher) {
+        let p1 = "**/**/**/**/**/**/d/e/f".parse::<Path>().unwrap();
+        let p2 = "**/**/**/**/**/**/e/f/g".parse::<Path>().unwrap();
+        bencher.iter(|| Path::overlap(p1.as_ref(), p2.as_ref()));
     }
 }
