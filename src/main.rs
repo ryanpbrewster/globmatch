@@ -2,6 +2,7 @@
 extern crate test;
 
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::io::BufRead;
 use std::str::FromStr;
 
@@ -17,9 +18,7 @@ fn main() -> Result<(), Box<Error>> {
     for i in 1..paths.len() {
         for j in 0..i {
             if Path::overlap(paths[i].as_ref(), &paths[j].as_ref()) {
-                println!("OVERLAP:");
-                println!("  - {:?}", paths[i]);
-                println!("  - {:?}", paths[j]);
+                println!("{} overlaps with {}", paths[i], paths[j]);
             }
         }
     }
@@ -33,6 +32,15 @@ pub enum Fragment {
     Glob,
 }
 
+impl Display for Fragment {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+        f.write_str(match self {
+            Fragment::Literal(s) => s,
+            Fragment::Wildcard => "*",
+            Fragment::Glob => "**",
+        })
+    }
+}
 impl FromStr for Fragment {
     type Err = &'static str;
 
@@ -53,6 +61,14 @@ impl FromStr for Fragment {
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Path(Vec<Fragment>);
+impl Display for Path {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+        for fragment in &self.0 {
+            write!(f, "/{}", fragment)?;
+        }
+        Ok(())
+    }
+}
 impl FromStr for Path {
     type Err = &'static str;
 
