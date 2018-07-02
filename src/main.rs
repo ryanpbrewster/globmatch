@@ -1,10 +1,8 @@
 #![feature(test)]
 extern crate test;
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::io::BufRead;
-use std::ops::IndexMut;
 use std::str::FromStr;
 
 fn main() -> Result<(), Box<Error>> {
@@ -79,12 +77,13 @@ impl AsRef<[Fragment]> for Path {
         &self.0
     }
 }
+
 impl Path {
     fn new() -> Path {
         Path(Vec::new())
     }
 
-    fn slow_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+    fn recursive_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         match (a.first(), b.first()) {
             // Trivial success
             (None, None) => true,
@@ -97,35 +96,35 @@ impl Path {
             (Some(&Fragment::Literal(_)), Some(&Fragment::Wildcard))
             | (Some(&Fragment::Wildcard), Some(&Fragment::Literal(_)))
             | (Some(&Fragment::Wildcard), Some(&Fragment::Wildcard)) => {
-                Path::overlap(&a[1..], &b[1..])
+                Path::recursive_overlap(&a[1..], &b[1..])
             }
             // Normal recursion
             (Some(&Fragment::Literal(ref a0)), Some(&Fragment::Literal(ref b0))) => {
-                a0 == b0 && Path::overlap(&a[1..], &b[1..])
+                a0 == b0 && Path::recursive_overlap(&a[1..], &b[1..])
             }
             // Glob handling
-            (Some(&Fragment::Glob), None) => Path::overlap(&a[1..], b),
-            (None, Some(&Fragment::Glob)) => Path::overlap(a, &b[1..]),
+            (Some(&Fragment::Glob), None) => Path::recursive_overlap(&a[1..], b),
+            (None, Some(&Fragment::Glob)) => Path::recursive_overlap(a, &b[1..]),
             // Left glob
             (Some(&Fragment::Glob), Some(&Fragment::Literal(_)))
             | (Some(&Fragment::Glob), Some(&Fragment::Wildcard)) => {
-                Path::overlap(&a[1..], &b[1..]) || Path::overlap(a, &b[1..])
+                Path::recursive_overlap(&a[1..], &b[1..]) || Path::recursive_overlap(a, &b[1..])
             }
             // Right glob
             (Some(&Fragment::Literal(_)), Some(&Fragment::Glob))
             | (Some(&Fragment::Wildcard), Some(&Fragment::Glob)) => {
-                Path::overlap(&a[1..], &b[1..]) || Path::overlap(&a[1..], b)
+                Path::recursive_overlap(&a[1..], &b[1..]) || Path::recursive_overlap(&a[1..], b)
             }
             // Both glob
             (Some(&Fragment::Glob), Some(&Fragment::Glob)) => {
-                Path::overlap(&a[1..], &b[1..])
-                    || Path::overlap(a, &b[1..])
-                    || Path::overlap(&a[1..], b)
+                Path::recursive_overlap(&a[1..], &b[1..])
+                    || Path::recursive_overlap(a, &b[1..])
+                    || Path::recursive_overlap(&a[1..], b)
             }
         }
     }
 
-    fn fast_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+    fn dp_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         let (m, n) = (a.len() + 1, b.len() + 1);
         let mut memo: Vec<bool> = vec![false; m * n];
         memo[0] = true;
@@ -138,14 +137,14 @@ impl Path {
         for i in 1..m {
             for j in 1..n {
                 memo[i * n + j] = match (&a[i - 1], &b[j - 1]) {
-                    // Wildcards
-                    (Fragment::Literal(_), Fragment::Wildcard)
-                    | (Fragment::Wildcard, Fragment::Literal(_))
-                    | (Fragment::Wildcard, Fragment::Wildcard) => memo[(i - 1) * n + (j - 1)],
                     // Literals
                     (Fragment::Literal(ref a0), Fragment::Literal(ref b0)) => {
                         a0 == b0 && memo[(i - 1) * n + (j - 1)]
                     }
+                    // Wildcards
+                    (Fragment::Literal(_), Fragment::Wildcard)
+                    | (Fragment::Wildcard, Fragment::Literal(_))
+                    | (Fragment::Wildcard, Fragment::Wildcard) => memo[(i - 1) * n + (j - 1)],
                     // Left glob
                     (Fragment::Glob, Fragment::Literal(_))
                     | (Fragment::Glob, Fragment::Wildcard) => {
@@ -168,8 +167,44 @@ impl Path {
         memo[m * n - 1]
     }
 
+    fn optimized_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+        let (m, n) = (a.len() + 1, b.len() + 1);
+        let mut cur: Vec<bool> = vec![false; n];
+        cur[0] = true;
+        for j in 1..n {
+            cur[j] = cur[j - 1] && b[j - 1] == Fragment::Glob;
+        }
+
+        let mut prev: Vec<bool> = vec![false; n];
+        for i in 1..m {
+            std::mem::swap(&mut prev, &mut cur);
+            cur[0] = prev[0] && a[i - 1] == Fragment::Glob;
+            for j in 1..n {
+                cur[j] = match (&a[i - 1], &b[j - 1]) {
+                    // Literals
+                    (Fragment::Literal(ref a0), Fragment::Literal(ref b0)) => {
+                        a0 == b0 && prev[j - 1]
+                    }
+                    // Wildcards
+                    (Fragment::Literal(_), Fragment::Wildcard)
+                    | (Fragment::Wildcard, Fragment::Literal(_))
+                    | (Fragment::Wildcard, Fragment::Wildcard) => prev[j - 1],
+                    // Left glob
+                    (Fragment::Glob, Fragment::Literal(_))
+                    | (Fragment::Glob, Fragment::Wildcard) => cur[j - 1] || prev[j - 1],
+                    // Right glob
+                    (Fragment::Literal(_), Fragment::Glob)
+                    | (Fragment::Wildcard, Fragment::Glob) => prev[j] || prev[j - 1],
+                    // Both glob
+                    (Fragment::Glob, Fragment::Glob) => cur[j - 1] || prev[j - 1] || prev[j],
+                };
+            }
+        }
+        cur[b.len()]
+    }
+
     fn overlap(a: &[Fragment], b: &[Fragment]) -> bool {
-        Path::fast_overlap(a, b)
+        Path::optimized_overlap(a, b)
     }
 }
 
@@ -246,10 +281,54 @@ mod tests {
     }
 
     use test::Bencher;
+    fn diff(base: &[Fragment]) -> (Path, Path) {
+        let p1 = {
+            let mut buf = base.to_vec();
+            buf.push(Fragment::Literal("a".to_owned()));
+            Path(buf)
+        };
+        let p2 = {
+            let mut buf = base.to_vec();
+            buf.push(Fragment::Literal("b".to_owned()));
+            Path(buf)
+        };
+        (p1, p2)
+    }
+    fn pathological_globs() -> (Path, Path) {
+        diff(&vec![Fragment::Glob; 5])
+    }
+    fn pathological_literal() -> (Path, Path) {
+        diff(&vec![Fragment::Literal("a".to_owned()); 1000])
+    }
     #[bench]
-    fn glob_glob_bench(bencher: &mut Bencher) {
-        let p1 = "**/**/**/**/**/**/d/e/f".parse::<Path>().unwrap();
-        let p2 = "**/**/**/**/**/**/e/f/g".parse::<Path>().unwrap();
-        bencher.iter(|| Path::overlap(p1.as_ref(), p2.as_ref()));
+    fn glob_glob_recursive(bencher: &mut Bencher) {
+        let (p1, p2) = pathological_globs();
+        bencher.iter(|| Path::recursive_overlap(p1.as_ref(), p2.as_ref()));
+    }
+    #[bench]
+    fn glob_glob_dp(bencher: &mut Bencher) {
+        let (p1, p2) = pathological_globs();
+        bencher.iter(|| Path::dp_overlap(p1.as_ref(), p2.as_ref()));
+    }
+    #[bench]
+    fn glob_glob_optimized(bencher: &mut Bencher) {
+        let (p1, p2) = pathological_globs();
+        bencher.iter(|| Path::optimized_overlap(p1.as_ref(), p2.as_ref()));
+    }
+
+    #[bench]
+    fn literal_literal_recursive(bencher: &mut Bencher) {
+        let (p1, p2) = pathological_literal();
+        bencher.iter(|| Path::recursive_overlap(p1.as_ref(), p2.as_ref()));
+    }
+    #[bench]
+    fn literal_literal_dp(bencher: &mut Bencher) {
+        let (p1, p2) = pathological_literal();
+        bencher.iter(|| Path::dp_overlap(p1.as_ref(), p2.as_ref()));
+    }
+    #[bench]
+    fn literal_literal_optimized(bencher: &mut Bencher) {
+        let (p1, p2) = pathological_literal();
+        bencher.iter(|| Path::optimized_overlap(p1.as_ref(), p2.as_ref()));
     }
 }
