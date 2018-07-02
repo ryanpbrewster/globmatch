@@ -298,7 +298,7 @@ mod tests {
         diff(&vec![Fragment::Glob; 5])
     }
     fn pathological_literal() -> (Path, Path) {
-        diff(&vec![Fragment::Literal("a".to_owned()); 1000])
+        diff(&vec![Fragment::Literal("a".to_owned()); 32])
     }
     #[bench]
     fn glob_glob_recursive(bencher: &mut Bencher) {
