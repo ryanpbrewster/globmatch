@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter};
 use std::io::BufRead;
 use std::str::FromStr;
 
-fn main() -> Result<(), Box<Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let paths: Vec<Path> = {
         let stdin = std::io::stdin();
         let mut buf = Vec::new();
@@ -106,7 +106,7 @@ impl Path {
      * Recursive implementation of the glob match algorithm.
      * Good best-case behavior, very bad worst-case behavior,
      */
-    fn recursive_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+    pub fn recursive_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         match (a.first(), b.first()) {
             // Trivial success
             (None, None) => true,
@@ -151,7 +151,7 @@ impl Path {
      * Dynamic-programming implementation of the glob match algorithm.
      * Acceptable best-case behavior, acceptable worst-case behavior,
      */
-    fn dp_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
+    pub fn dp_overlap(a: &[Fragment], b: &[Fragment]) -> bool {
         let (m, n) = (a.len() + 1, b.len() + 1);
         let mut memo: Vec<bool> = vec![false; m * n];
         memo[0] = true;
@@ -303,10 +303,10 @@ mod tests {
         (p1, p2)
     }
     fn pathological_globs() -> (Path, Path) {
-        diff(&vec![Fragment::Glob; 5])
+        diff(&vec![Fragment::Glob; 6])
     }
     fn pathological_literal() -> (Path, Path) {
-        diff(&vec![Fragment::Literal("a".to_owned()); 32])
+        diff(&vec![Fragment::Literal("a".to_owned()); 64])
     }
     #[bench]
     fn glob_glob_recursive(bencher: &mut Bencher) {
